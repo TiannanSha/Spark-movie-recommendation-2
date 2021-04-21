@@ -46,64 +46,122 @@ object Predictor extends App {
   })
   assert(test.count == 20000, "Invalid test data")
 
-  // *** my code starts here
+  // ***************** my code starts here ***********************
   val avgGlobal = train.map(r => r.rating).mean
   val ru_s = train.groupBy(r => r.user).map{
     case (user, rs) => (user, rs.map(r=>r.rating).sum / rs.size.toDouble)
   }  // (u, ru_)
 
-  // all rhat_ui for training set
+  // ***** equation 4, preprocessing *****
+  // numerator for equation 4
   val rhat_ui = train.map(r=>(r.user, (r.item, r.rating)))   // entry: (u, (i, rui))
     .join(ru_s)  // entry (u, ((i, rui), ru_))
     .map{case(  u, ((i, rui),ru_)  ) => ( (u,i), normalDevi(rui,ru_) )} // ((u,i), rhat_ui)
-  val denoms = rhat_ui.map{ case ((u,i), rhat) => (u, rhat)}
-    .reduceByKey((a,b)=>a*a+b*b)  // (u, sum(rhat_u_^2))
+  // denominator for equation 4
+  val denoms = rhat_ui.map{ case ((u,i), rhat) => (u, rhat*rhat)}
+    .reduceByKey((a,b)=>a+b)  // (u, sum(rhat_u_^2))
     .mapValues(math.sqrt)
-  // equation 4
-  val rCrown_ui = rhat_ui.map{case((u,i),rhat_ui) => (u, (i, rhat_ui))}
+  // equation 4, rc_ui for all (u,i) in train, rc is the preprocessing results
+  // fixme maybe rcs or sim should only be calculated for (u,i) in test?
+  val rcs = rhat_ui.map{case((u,i),rhat_ui) => (u, (i, rhat_ui))}
     .join(denoms)
     .map{case(u, ((i, rhat_ui),denom)) => ((u,i), rhat_ui/denom)}
+  println(s"rcs = ${   rcs.map( {case((u,i), rc)=>rc} ).stats()   }")
   // end of preprocessing
+//fixme rc might be bad
 
-  // get similarities for all u,v
-  val simDum=1.0
+//  def block(u:Int):RDD[((Int,Int),Double)] = {
+//    val uRdd = spark.sparkContext.parallelize(Seq((u,1)))
+//    val rCrownsKeyI = rCrowns.map({case((v,i),rc_vi)=>(i,(v,rc_vi))})
+//    train.map( r => (r.user, r.item)).join(uRdd) // (u,(i,1))
+//      .map({case(u,(i,one))=>((u,i),1)}).join(rCrowns) // ((u,i),(1,rCrown_ui))
+//      .map({case((u,i),(1,rCrown_ui)) => (i,(u,rCrown_ui))})
+//      .join(rCrownsKeyI) // ( i, ((u, rc_ui),(v,rc_vi)) )  i are rated by both u,v
+//      .map({case( i, ((u, rc_ui),(v,rc_vi)) ) => ((u,v),rc_ui*rc_vi)})
+//      .reduceByKey(_+_)
+//  }
+//
+//  val userCountTr = train.map(r=>r.user).count().toInt
+//  println("before simblocks")
+//  val simBlocks = Range(0,userCountTr).map(u=>block(u))
+//  println("before union")
+//  val sims = spark.sparkContext.union(simBlocks)
+  // todo if too slow can also try do multiple joins
 
-  // get the predictions (u,i are the test's user and item, vs=U(i))
-  val trGroupbyI = train.map(r=>(r.item, r.user)).groupByKey() // (i, [v1,v2,...])
 
-  // rbarhats for all the (u,i) in test s.t. i is in train and hence rbarhat_i(u) is defined
-  val rbarhats = test.map(r=>(r.item, r.user)).join(trGroupbyI) // (i',(u',[v1,v2,...]))
-    .flatMap({case(i,(u,vs)) => vs.map( v=>((v,i),u)  )}) // ((v,i),u)
-    .join(rhat_ui).map({case( (v,i),(u, r_vi) ) => ((u,v),(i,r_vi))}) // ((u,v)(i, r_vi))
-    .map({case((u,v),(i,r_vi))=>((u,v),(i,r_vi, simDum))}) // fixme: join with actual similarities
-    .map({case((u,v),(i,r_vi, suv)) => ((u,i),(suv*r_vi,math.abs(suv)))})  //((u,i),[(suv*rvi, |suv|)])
-    .reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)) // ((u,i), (sum(suv*rvi), sum(|suv|)))
-    .map({case((u,i),t)=>((u,i),t._1/t._2)}) //((u,i), rbarhat_ui))
+//  val allSim = block(0)
+//  for (i<-1 until userCountTr) {
+//    allSim.union(block(i))
+//  }
 
-  val rPred = test.map(r=>((r.user, r.item),1)).leftOuterJoin(rbarhats) // ((u,i),(1,Option(rbarhat))
-    .map({  case((u,i),t) => (u,(i,{if (t._2.isEmpty) 0 else t._2.get}))  }) // (u, (i,rbarhat_ui/avgGlobal)
-    .leftOuterJoin(ru_s)  // (u,((i,rbarhat_ui/avgGlobal),option(ru_))), a user in test might not be in train
-    .map(   {case( u, ((i,rbarhat_ui),ru_) ) =>
-      ((u,i),pui({if (ru_.isDefined) ru_.get else avgGlobal},rbarhat_ui))}   )
+  // ***** equation 5, calculate cosine similarities *****
+  // get nonzero cosine similarities for all u,v that have shared i
+  // (i,u) join (i,v) on i generate (i,(u,v)), where i rated by both u,v
+  // then group by (u,v), get ((u,v),[i1,i2,...]) where i1,i2,... are rated by both u,v
+  val rcs_byI = rcs.map({case((u,i),rc)=>(i,(u,rc))})  // ()
+  val cosSims = rcs_byI.join(rcs_byI) //all triplets ( i, ((u,rc_ui),(v,rc_vi)) ) such that i is rated by both u,v
+    .map({case( i, ((u, rc_ui),(v,rc_vi)) ) => ((u,v),rc_ui*rc_vi)})
+    .reduceByKey(_+_)
+  println("sims stats:")
+  println(cosSims.values.stats())
 
-//  val rdd = test.map(r=>(r.item, r.user)).join(trGroupbyI) // (i',(u',[v1,v2,...]))
-//  println(test.count)
-//  println(rdd.count)
 
-//    .flatMap({case(i,(u,vs)) => vs.map( v=>((v,i),u)  )}) // ((v,i),u)
-//    .join(rhat_ui).map({case( (v,i),(u, r_vi) ) => ((u,v),(i,r_vi))}) // ((u,v)(i, r_vi))
-//    .map({case((u,v),(i,r_vi))=>((u,v),(i,r_vi, simDum))}) // fixme: join with actual similarities
-//    .map({case((u,v),(i,r_vi, suv)) => ((u,i),(suv*r_vi,math.abs(suv)))})  //((u,i),[(suv*rvi, |suv|)])
-//    .reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)) // ((u,i), (sum(suv*rvi), sum(|suv|)))
-//    .map({case((u,i),t)=>(u,(i,t._1/t._2))}) //(u,(i, rbarhat_ui))
-//    .leftOuterJoin(ru_s)  // (u,((i,rbarhat_ui),option(ru_))), a user in test might not be in train
-//    .map({case( u, ((i,rbarhat_ui),ru_) ) => ((u,i),optionalPui(ru_, rbarhat_ui, avgGlobal))})
+  // ***** equation 2, weighted sum deviation *****
+  // rbarhats for all the (u,i) s.t. i is in train and hence rbarhat_i(u) is defined
+  //todo val rbarhats_cosSims = get_rbarhats(cosSims, train)
+  def get_rbarhats(sims: RDD[((Int,Int),Double)], train:RDD[Rating]) = {
+    val trGroupbyI = train.map(r=>(r.item, r.user)).groupByKey() // (i, [v1,v2,...])
+    val temp = test.map(r=>(r.item, r.user)).join(trGroupbyI) // (i',(u',[v1,v2,...]))
+      .flatMap({case(i,(u,vs)) => vs.map( v=>((v,i),u)  )}) // ((v,i'),u'), i is rated by both u',v
+      .join(rhat_ui).map({case( (v,i),(u, r_vi) ) => ((u,v),(i,r_vi))}) // ((u',v),(i, r_vi))
+      // (u',v): u' test's user, v has rated i' todo can (u', v) be not in sim? yeah..u'might not be in train
+      //.map({case((u,v),(i,r_vi))=>((u,v),(i,r_vi, simDum))}) // this for pretending suv=1
+      .leftOuterJoin(sims) // ( (u,v),((i, r_vi),suv) )
+      temp.map({case((u,v),((i,r_vi), Some(suv))) => ((u,i),(suv*r_vi,math.abs(suv)))
+      case((u,v),((i,r_vi), None)) => ((u,i),(0.0,0.0))})  //((u,i),[(suv*rvi, |suv|)])
+      .reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)) // ((u,i), (sum(suv*rvi), sum(|suv|)))
+      .map({case((u,i),t)=>((u,i),t._1/t._2)}) //((u,i), rbarhat_ui))
+  }
 
+  // ***** equation 3, generate predictions *****
+  //todo val rPred_cosSim = get_rPred(rbarhats_cosSims)
+  def get_rPred(rbarhats:RDD[((Int,Int),Double)]) = {
+    test.map(r=>((r.user, r.item),1)).leftOuterJoin(rbarhats) // ((u,i),(1,Option(rbarhat))
+      .map({  case((u,i),t) => (u,(i,{if (t._2.isEmpty) 0 else t._2.get}))  }) // (u, (i,rbarhat_ui/0)
+      .leftOuterJoin(ru_s)  // (u,((i,rbarhat_ui/avgGlobal),option(ru_))), a user in test might not be in train
+      .map(   {case( u, ((i,rbarhat_ui),ru_) ) =>
+        ((u,i),pui({if (ru_.isDefined) ru_.get else avgGlobal},rbarhat_ui))}   )
+  }
+
+  // ***** calculate mae for method using cosine similarities *****
   val rTrue = test.map(r=>((r.user, r.item), r.rating))
-  val cosMae = maeUIR(rTrue, rPred)
+  //val cosMae = maeUIR(rTrue, rPred_cosSim)todo
+
+  //---------------------------------------------------------------------------------
+  // ***** calculate jaccard similarities *****
+
+  // similar to assignment, we compare the overlapping between the sets of items "LIKED" by u and v
+  val countByU = train.map(r=>(r.user, r.item)).groupByKey().mapValues(is=>is.size)  // [(u, [i1,i2,...])]
+  val posRatingsByI = train.map(r=>(r.item, r.user))
+  val intersectCounts = posRatingsByI.join(posRatingsByI) // all triplets (i, (u,v)) s.t. i rated by both (u,v).
+    .map({case(i, (u,v)) => ((u,v),1)})  //fixme might have duplicates here？
+    .reduceByKey(_+_)
+  val jacSims = intersectCounts.map({case((u,v),uv_count) => (u, (v, uv_count))}).join(countByU)  //(u, ((v, uv_count),u_count))
+    .map({case(u,((v, uv_count),u_count))=>(v,(u,uv_count,u_count))}).join(countByU)//(v, ((u,uv_count,u_count),v_count)
+    .map({case(v, ((u,uv_count,u_count),v_count)) => (  (u,v), uv_count.toDouble/(u_count+v_count-uv_count).toDouble )})
+  println("jacsim stats")
+  println(jacSims.values.stats)
+  jacSims.take(20).foreach(println)
+
+  val rbarhats_jacSims = get_rbarhats(jacSims, train)     // equation 2
+  println("rbarhats_jacSims stats" )
+  println(rbarhats_jacSims.values.stats)
+  val rPred_jacSim = get_rPred(rbarhats_jacSims)   // euqation 3
+
+  val jacMae = maeUIR(rTrue, rPred_jacSim)
+
 
   // *** helper functions
-
 
   // both rTrue and rPred are in the form of ((u, i), r), where (u,i) is the unique key
   // rTure's r is the actual rating, rPred's r is the predicted rating
@@ -162,13 +220,13 @@ object Predictor extends App {
         implicit val formats = org.json4s.DefaultFormats
         val answers: Map[String, Any] = Map(
           "Q2.3.1" -> Map(
-            "CosineBasedMae" -> cosMae, // Datatype of answer: Double
-            "CosineMinusBaselineDifference" -> (cosMae-0.7669) // Datatype of answer: Double
+            "CosineBasedMae" -> 0.0,//cosMae, // Datatype of answer: Double
+            "CosineMinusBaselineDifference" -> 0.0//(cosMae-0.7669) // Datatype of answer: Double
           ),
 
           "Q2.3.2" -> Map(
-            "JaccardMae" -> 0.0, // Datatype of answer: Double
-            "JaccardMinusCosineDifference" -> 0.0 // Datatype of answer: Double
+            "JaccardMae" -> jacMae, // Datatype of answer: Double
+            "JaccardMinusCosineDifference" -> 0.0//(jacMae - cosMae) // Datatype of answer: Double
           ),
 
           "Q2.3.3" -> Map(
