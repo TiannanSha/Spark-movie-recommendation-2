@@ -71,29 +71,6 @@ object Predictor extends App {
   // end of preprocessing
   //fixme rc might be bad
 
-  //  def block(u:Int):RDD[((Int,Int),Double)] = {
-  //    val uRdd = spark.sparkContext.parallelize(Seq((u,1)))
-  //    val rCrownsKeyI = rCrowns.map({case((v,i),rc_vi)=>(i,(v,rc_vi))})
-  //    train.map( r => (r.user, r.item)).join(uRdd) // (u,(i,1))
-  //      .map({case(u,(i,one))=>((u,i),1)}).join(rCrowns) // ((u,i),(1,rCrown_ui))
-  //      .map({case((u,i),(1,rCrown_ui)) => (i,(u,rCrown_ui))})
-  //      .join(rCrownsKeyI) // ( i, ((u, rc_ui),(v,rc_vi)) )  i are rated by both u,v
-  //      .map({case( i, ((u, rc_ui),(v,rc_vi)) ) => ((u,v),rc_ui*rc_vi)})
-  //      .reduceByKey(_+_)
-  //  }
-  //
-  //  val userCountTr = train.map(r=>r.user).count().toInt
-  //  println("before simblocks")
-  //  val simBlocks = Range(0,userCountTr).map(u=>block(u))
-  //  println("before union")
-  //  val sims = spark.sparkContext.union(simBlocks)
-  // todo if too slow can also try do multiple joins
-
-
-  //  val allSim = block(0)
-  //  for (i<-1 until userCountTr) {
-  //    allSim.union(block(i))
-  //  }
 
   // ***** equation 5, calculate cosine similarities *****
   // get nonzero cosine similarities for all u,v that have shared i
@@ -103,54 +80,35 @@ object Predictor extends App {
   val cosSims = rcs_byI.join(rcs_byI) //all triplets ( i, ((u,rc_ui),(v,rc_vi)) ) such that i is rated by both u,v
     .map({case( i, ((u, rc_ui),(v,rc_vi)) ) => ((u,v),rc_ui*rc_vi)})
     .reduceByKey(_+_)
-//  println("sims stats:")
-//  println(cosSims.values.stats())
 
   def get_knnSims(K:Int) = {
-    val temp = cosSims.groupBy(suv=>suv._1._1) // (u,[((u,v),suv),...])
+    cosSims.groupBy(suv=>suv._1._1) // (u,[((u,v),suv),...])
       .flatMap(   ts=>ts._2.toList.sortWith( (t1,t2)=>t1._2>t2._2 ).take(K+1)  )
-    temp.take(20).foreach(println)
-    temp
 //    cosSims.groupBy(suv=>suv._1._1) // (u,[((u,v),suv),...])
 //      .flatMap(ts=>ts._2.toSeq.sortWith((s1,s2)=>s1._2>s1._2).take(k+1))
        //also take suu, which is always 1 and won't be used
   }
-  val K = 100
+  val K = 300
   val knnSims = get_knnSims(K)
 
   // ***** equation 2, weighted sum deviation *****
   // rbarhats for all the (u,i) s.t. i is in train and hence rbarhat_i(u) is defined
   val rbarhats_knnSims = get_rbarhats(knnSims, train)
-//  println("rbarhats_knnSims")
-//  rbarhats_knnSims.take(20).foreach(println)
-//  println(s"rbarhats_knnSims stats: ${rbarhats_knnSims.values.stats()}")
 
   def get_rbarhats(sims: RDD[((Int,Int),Double)], train:RDD[Rating]) = {
     val trGroupbyI = train.map(r=>(r.item, r.user)).groupByKey() // (i, [v1,v2,...])
-    val temp = test.map(r=>(r.item, r.user)).join(trGroupbyI) // (i',(u',[v1,v2,...]))
+    test.map(r=>(r.item, r.user)).join(trGroupbyI) // (i',(u',[v1,v2,...]))
       .flatMap({case(i,(u,vs)) => vs.map( v=>((v,i),u)  )}) // ((v,i'),u'), i is rated by both u',v
       .join(rhat_ui).map({case( (v,i),(u, r_vi) ) => ((u,v),(i,r_vi))}) // ((u',v),(i, r_vi))
-//    println("before join sims NAN pairs ( (u,v),((i, r_vi),suv) )")
-//    val t11 = temp.lookup((354,149)).foreach(println)
-//    val t21 = temp.lookup((1,107)).foreach(println)
-//    val t31 = temp.lookup((64,1063)).foreach(println)
-//    val t41 = temp.lookup((16,692)).foreach(println)
-      // (u',v): u' test's user, v has rated i' todo can (u', v) be not in sim? yeah..u'might not be in train
-      //.map({case((u,v),(i,r_vi))=>((u,v),(i,r_vi, simDum))}) // this for pretending suv=1
-      val temp2 = temp.leftOuterJoin(sims) // ( (u,v),((i, r_vi),suv) )
-//    println("NAN pairs ( (u,v),((i, r_vi),suv) )")
-//    val t1 = temp2.lookup((354,149)).foreach(println)
-//    val t2 = temp2.lookup((1,107)).foreach(println)
-//    val t3 = temp2.lookup((64,1063)).foreach(println)
-//    val t4 = temp2.lookup((16,692)).foreach(println)
+      .leftOuterJoin(sims) // ( (u,v),((i, r_vi),suv) )
 
-    temp2.map({case((u,v),((i,r_vi), Some(suv))) => ((u,i),(suv*r_vi,math.abs(suv)))
-    case((u,v),((i,r_vi), None)) => ((u,i),(0.0,0.0))})  //((u,i),[(suv*rvi, |suv|)])
+      .map({case((u,v),((i,r_vi), Some(suv))) => ((u,i),(suv*r_vi,math.abs(suv)))
+            case((u,v),((i,r_vi), None)) => ((u,i),(0.0,0.0))})  //((u,i),[(suv*rvi, |suv|)])
       .reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)) // ((u,i), (sum(suv*rvi), sum(|suv|)))
       .map({case((u,i),t)=>((u,i),if (t._2==0.0) 0.0 else t._1/t._2)}) //((u,i), rbarhat_ui))
 
 //    // filter first before other operations epspecially join
-//    temp2.filter(t=>t._2._2.isDefined)
+//      .filter(t=>t._2._2.isDefined)
 //      .map({case((u,v),((i,r_vi), Some(suv))) => ((u,i),(suv*r_vi,math.abs(suv)))})  //((u,i),[(suv*rvi, |suv|)])
 //      .reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)) // ((u,i), (sum(suv*rvi), sum(|suv|)))
 //      .map({case((u,i),t)=>((u,i),if (t._2==0.0) 0.0 else t._1/t._2)}) //((u,i), rbarhat_ui))
@@ -190,16 +148,17 @@ object Predictor extends App {
           "Q3.2.1" -> Map(
             // Discuss the impact of varying k on prediction accuracy on
             // the report.
-            "MaeForK=10" -> 0.0, // Datatype of answer: Double
-            "MaeForK=30" -> 0.0, // Datatype of answer: Double
-            "MaeForK=50" -> 0.0, // Datatype of answer: Double
-            "MaeForK=100" -> 0.0, // Datatype of answer: Double
-            "MaeForK=200" -> 0.0, // Datatype of answer: Double
-            "MaeForK=400" -> 0.0, // Datatype of answer: Double
-            "MaeForK=800" -> 0.0, // Datatype of answer: Double
-            "MaeForK=943" -> 0.0, // Datatype of answer: Double
-            "LowestKWithBetterMaeThanBaseline" -> 0, // Datatype of answer: Int
-            "LowestKMaeMinusBaselineMae" -> 0.0 // Datatype of answer: Double
+            "MaeForK=10" -> 0.8407036862423928, // Datatype of answer: Double
+            "MaeForK=30" -> 0.7914221792247477, // Datatype of answer: Double
+            "MaeForK=50" -> 0.7749407796360606, // Datatype of answer: Double
+            "MaeForK=100" -> 0.7561353222065882, // Datatype of answer: Double
+            "MaeForK=200" -> 0.7484528977469215, // Datatype of answer: Double
+            "MaeForK=300" -> 0.7469140388149915, // Datatype of answer: Double
+            "MaeForK=400" -> 0.7471389103638729, // Datatype of answer: Double
+            "MaeForK=800" -> 0.7475383223779437 , // Datatype of answer: Double
+            "MaeForK=943" -> 0.7477653398324886, // Datatype of answer: Double
+            "LowestKWithBetterMaeThanBaseline" -> 100, // Datatype of answer: Int
+            "LowestKMaeMinusBaselineMae" -> (0.7561353222065882-0.7669) // Datatype of answer: Double
           ),
 
           "Q3.2.2" ->  Map(
