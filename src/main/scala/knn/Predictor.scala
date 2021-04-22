@@ -93,8 +93,8 @@ object Predictor extends App {
           ),
 
           "Q3.2.3" -> Map(
-            "SizeOfRamInBytes" -> 0, // Datatype of answer: Int
-            "MaximumNumberOfUsersThatCanFitInRam" -> 0 // Datatype of answer: Int
+            "SizeOfRamInBytes" -> 0, // Datatype of answer: Long
+            "MaximumNumberOfUsersThatCanFitInRam" -> 0 // Datatype of answer: Long
           )
 
           // Answer the Question 3.2.4 exclusively on the report.
