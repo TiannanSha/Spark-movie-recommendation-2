@@ -70,6 +70,7 @@ object Predictor extends App {
             "MaeForK=50" -> 0.0, // Datatype of answer: Double
             "MaeForK=100" -> 0.0, // Datatype of answer: Double
             "MaeForK=200" -> 0.0, // Datatype of answer: Double
+            "MaeForK=300" -> 0.0, // Datatype of answer: Double
             "MaeForK=400" -> 0.0, // Datatype of answer: Double
             "MaeForK=800" -> 0.0, // Datatype of answer: Double
             "MaeForK=943" -> 0.0, // Datatype of answer: Double
@@ -85,6 +86,7 @@ object Predictor extends App {
             "MinNumberOfBytesForK=50" -> 0, // Datatype of answer: Int
             "MinNumberOfBytesForK=100" -> 0, // Datatype of answer: Int
             "MinNumberOfBytesForK=200" -> 0, // Datatype of answer: Int
+            "MinNumberOfBytesForK=300" -> 0, // Datatype of answer: Int
             "MinNumberOfBytesForK=400" -> 0, // Datatype of answer: Int
             "MinNumberOfBytesForK=800" -> 0, // Datatype of answer: Int
             "MinNumberOfBytesForK=943" -> 0 // Datatype of answer: Int
