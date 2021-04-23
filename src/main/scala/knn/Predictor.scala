@@ -84,9 +84,10 @@ object Predictor extends App {
   def get_knnSims(K:Int) = {
     cosSims.groupBy(suv=>suv._1._1) // (u,[((u,v),suv),...])
       .flatMap(   ts=>ts._2.toList.sortWith( (t1,t2)=>t1._2>t2._2 ).take(K+1)  )
+    //also take suu, which is always 1 and won't be used
 //    cosSims.groupBy(suv=>suv._1._1) // (u,[((u,v),suv),...])
 //      .flatMap(ts=>ts._2.toSeq.sortWith((s1,s2)=>s1._2>s1._2).take(k+1))
-       //also take suu, which is always 1 and won't be used
+
   }
   val K = 300
   val knnSims = get_knnSims(K)
@@ -169,14 +170,15 @@ object Predictor extends App {
             "MinNumberOfBytesForK=50" -> 0, // Datatype of answer: Int
             "MinNumberOfBytesForK=100" -> 0, // Datatype of answer: Int
             "MinNumberOfBytesForK=200" -> 0, // Datatype of answer: Int
+            "MinNumberOfBytesForK=300" -> 0, // Datatype of answer: Int
             "MinNumberOfBytesForK=400" -> 0, // Datatype of answer: Int
             "MinNumberOfBytesForK=800" -> 0, // Datatype of answer: Int
             "MinNumberOfBytesForK=943" -> 0 // Datatype of answer: Int
           ),
 
           "Q3.2.3" -> Map(
-            "SizeOfRamInBytes" -> 0, // Datatype of answer: Int
-            "MaximumNumberOfUsersThatCanFitInRam" -> 0 // Datatype of answer: Int
+            "SizeOfRamInBytes" -> 0, // Datatype of answer: Long
+            "MaximumNumberOfUsersThatCanFitInRam" -> 0 // Datatype of answer: Long
           )
 
           // Answer the Question 3.2.4 exclusively on the report.

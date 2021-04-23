@@ -52,6 +52,7 @@ object Predictor extends App {
     case (user, rs) => (user, rs.map(r=>r.rating).sum / rs.size.toDouble)
   }  // (u, ru_)
 
+
   // ***** equation 4, preprocessing *****
   // numerator for equation 4
   val rhat_ui = train.map(r=>(r.user, (r.item, r.rating)))   // entry: (u, (i, rui))
@@ -66,33 +67,9 @@ object Predictor extends App {
   val rcs = rhat_ui.map{case((u,i),rhat_ui) => (u, (i, rhat_ui))}
     .join(denoms)
     .map{case(u, ((i, rhat_ui),denom)) => ((u,i), rhat_ui/denom)}
-  println(s"rcs = ${   rcs.map( {case((u,i), rc)=>rc} ).stats()   }")
+  //println(s"rcs = ${   rcs.map( {case((u,i), rc)=>rc} ).stats()   }")
   // end of preprocessing
-//fixme rc might be bad
 
-//  def block(u:Int):RDD[((Int,Int),Double)] = {
-//    val uRdd = spark.sparkContext.parallelize(Seq((u,1)))
-//    val rCrownsKeyI = rCrowns.map({case((v,i),rc_vi)=>(i,(v,rc_vi))})
-//    train.map( r => (r.user, r.item)).join(uRdd) // (u,(i,1))
-//      .map({case(u,(i,one))=>((u,i),1)}).join(rCrowns) // ((u,i),(1,rCrown_ui))
-//      .map({case((u,i),(1,rCrown_ui)) => (i,(u,rCrown_ui))})
-//      .join(rCrownsKeyI) // ( i, ((u, rc_ui),(v,rc_vi)) )  i are rated by both u,v
-//      .map({case( i, ((u, rc_ui),(v,rc_vi)) ) => ((u,v),rc_ui*rc_vi)})
-//      .reduceByKey(_+_)
-//  }
-//
-//  val userCountTr = train.map(r=>r.user).count().toInt
-//  println("before simblocks")
-//  val simBlocks = Range(0,userCountTr).map(u=>block(u))
-//  println("before union")
-//  val sims = spark.sparkContext.union(simBlocks)
-  // todo if too slow can also try do multiple joins
-
-
-//  val allSim = block(0)
-//  for (i<-1 until userCountTr) {
-//    allSim.union(block(i))
-//  }
 
   // ***** equation 5, calculate cosine similarities *****
   // get nonzero cosine similarities for all u,v that have shared i
@@ -102,13 +79,13 @@ object Predictor extends App {
   val cosSims = rcs_byI.join(rcs_byI) //all triplets ( i, ((u,rc_ui),(v,rc_vi)) ) such that i is rated by both u,v
     .map({case( i, ((u, rc_ui),(v,rc_vi)) ) => ((u,v),rc_ui*rc_vi)})
     .reduceByKey(_+_)
-  println("sims stats:")
-  println(cosSims.values.stats())
+//  println("sims stats:")
+//  println(cosSims.values.stats())
 
 
   // ***** equation 2, weighted sum deviation *****
   // rbarhats for all the (u,i) s.t. i is in train and hence rbarhat_i(u) is defined
-  //todo val rbarhats_cosSims = get_rbarhats(cosSims, train)
+  val rbarhats_cosSims = get_rbarhats(cosSims, train)
   def get_rbarhats(sims: RDD[((Int,Int),Double)], train:RDD[Rating]) = {
     val trGroupbyI = train.map(r=>(r.item, r.user)).groupByKey() // (i, [v1,v2,...])
     val temp = test.map(r=>(r.item, r.user)).join(trGroupbyI) // (i',(u',[v1,v2,...]))
@@ -124,7 +101,7 @@ object Predictor extends App {
   }
 
   // ***** equation 3, generate predictions *****
-  //todo val rPred_cosSim = get_rPred(rbarhats_cosSims)
+  val rPred_cosSim = get_rPred(rbarhats_cosSims)
   def get_rPred(rbarhats:RDD[((Int,Int),Double)]) = {
     test.map(r=>((r.user, r.item),1)).leftOuterJoin(rbarhats) // ((u,i),(1,Option(rbarhat))
       .map({  case((u,i),t) => (u,(i,{if (t._2.isEmpty) 0 else t._2.get}))  }) // (u, (i,rbarhat_ui/0)
@@ -135,7 +112,7 @@ object Predictor extends App {
 
   // ***** calculate mae for method using cosine similarities *****
   val rTrue = test.map(r=>((r.user, r.item), r.rating))
-  //val cosMae = maeUIR(rTrue, rPred_cosSim)todo
+  val cosMae = maeUIR(rTrue, rPred_cosSim)
 
   //---------------------------------------------------------------------------------
   // ***** calculate jaccard similarities *****
@@ -144,18 +121,14 @@ object Predictor extends App {
   val countByU = train.map(r=>(r.user, r.item)).groupByKey().mapValues(is=>is.size)  // [(u, [i1,i2,...])]
   val posRatingsByI = train.map(r=>(r.item, r.user))
   val intersectCounts = posRatingsByI.join(posRatingsByI) // all triplets (i, (u,v)) s.t. i rated by both (u,v).
-    .map({case(i, (u,v)) => ((u,v),1)})  //fixme might have duplicates here？
+    .map({case(i, (u,v)) => ((u,v),1)})
     .reduceByKey(_+_)
   val jacSims = intersectCounts.map({case((u,v),uv_count) => (u, (v, uv_count))}).join(countByU)  //(u, ((v, uv_count),u_count))
     .map({case(u,((v, uv_count),u_count))=>(v,(u,uv_count,u_count))}).join(countByU)//(v, ((u,uv_count,u_count),v_count)
     .map({case(v, ((u,uv_count,u_count),v_count)) => (  (u,v), uv_count.toDouble/(u_count+v_count-uv_count).toDouble )})
-  println("jacsim stats")
-  println(jacSims.values.stats)
-  jacSims.take(20).foreach(println)
 
   val rbarhats_jacSims = get_rbarhats(jacSims, train)     // equation 2
-  println("rbarhats_jacSims stats" )
-  println(rbarhats_jacSims.values.stats)
+
   val rPred_jacSim = get_rPred(rbarhats_jacSims)   // euqation 3
 
   val jacMae = maeUIR(rTrue, rPred_jacSim)
@@ -203,6 +176,26 @@ object Predictor extends App {
     }
   }
 
+  //---------------------------------------------------------------------------------
+
+  // ***** Q2.3.3 *****
+  val numUser = ru_s.count()
+
+  // ***** Q2.3.4 *****
+  // number of sim to compute = number of intersections |I(u) intersect I(v)|
+  // there are in total numUser^2 (u,v) pairs. We want the statistics of all |I(u) intersect I(v)|
+  // intersectCounts are non-zero |I(u) intersect I(v)|. For all other u,v, |I(u) intersect I(v)|=0
+  val numZero = numUser*numUser - intersectCounts.count
+  val allIntersect = intersectCounts.values.union(spark.sparkContext.parallelize(Range(0,numZero.toInt).map(_=>0)))
+  val min = allIntersect.min
+  val max = allIntersect.max
+  val mean = allIntersect.mean
+  val stdDev = allIntersect.stdev
+
+  // ***** Q2.3.5 *****
+  val numNonzeroSims = cosSims.count.toInt
+  val numBytesNonzero = 8*numNonzeroSims //double is of size 8 bytes
+
   // Save answers as JSON
   def printToFile(content: String,
                   location: String = "./answers.json") =
@@ -220,34 +213,34 @@ object Predictor extends App {
         implicit val formats = org.json4s.DefaultFormats
         val answers: Map[String, Any] = Map(
           "Q2.3.1" -> Map(
-            "CosineBasedMae" -> 0.0,//cosMae, // Datatype of answer: Double
-            "CosineMinusBaselineDifference" -> 0.0//(cosMae-0.7669) // Datatype of answer: Double
+            "CosineBasedMae" -> cosMae, // Datatype of answer: Double
+            "CosineMinusBaselineDifference" -> (cosMae-0.7669) // Datatype of answer: Double
           ),
 
           "Q2.3.2" -> Map(
             "JaccardMae" -> jacMae, // Datatype of answer: Double
-            "JaccardMinusCosineDifference" -> 0.0//(jacMae - cosMae) // Datatype of answer: Double
+            "JaccardMinusCosineDifference" -> (jacMae - cosMae) // Datatype of answer: Double
           ),
 
           "Q2.3.3" -> Map(
             // Provide the formula that computes the number of similarity computations
             // as a function of U in the report.
-            "NumberOfSimilarityComputationsForU1BaseDataset" -> 0 // Datatype of answer: Int
+            "NumberOfSimilarityComputationsForU1BaseDataset" ->  numUser*numUser // Datatype of answer: Int
           ),
 
           "Q2.3.4" -> Map(
             "CosineSimilarityStatistics" -> Map(
-              "min" -> 0.0,  // Datatype of answer: Double
-              "max" -> 0.0, // Datatype of answer: Double
-              "average" -> 0.0, // Datatype of answer: Double
-              "stddev" -> 0.0 // Datatype of answer: Double
+              "min" -> min,  // Datatype of answer: Double
+              "max" -> max, // Datatype of answer: Double
+              "average" -> mean, // Datatype of answer: Double
+              "stddev" -> stdDev // Datatype of answer: Double
             )
           ),
 
           "Q2.3.5" -> Map(
             // Provide the formula that computes the amount of memory for storing all S(u,v)
             // as a function of U in the report.
-            "TotalBytesToStoreNonZeroSimilarityComputationsForU1BaseDataset" -> 0 // Datatype of answer: Int
+            "TotalBytesToStoreNonZeroSimilarityComputationsForU1BaseDataset" -> numBytesNonzero // Datatype of answer: Int
           ),
 
           "Q2.3.6" -> Map(
