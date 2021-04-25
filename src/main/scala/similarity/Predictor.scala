@@ -115,8 +115,9 @@ object Predictor extends App {
       .join(rhat_ui).map({case( (v,i),(u, r_vi) ) => ((u,v),(i,r_vi))}) // ((u',v),(i, r_vi))
 
     println(temp.getNumPartitions) //todo delete temp
-      temp.leftOuterJoin(sims) // ( (u,v),((i, r_vi),suv) )
-      .map({case((u,v),((i,r_vi), Some(suv))) => ((u,i),(suv*r_vi,math.abs(suv)))
+      val temp2 = temp.leftOuterJoin(sims) // ( (u,v),((i, r_vi),suv) )
+    println(temp2.getNumPartitions)
+      temp2.map({case((u,v),((i,r_vi), Some(suv))) => ((u,i),(suv*r_vi,math.abs(suv)))
       case((u,v),((i,r_vi), None)) => ((u,i),(0.0,0.0))})  //((u,i),[(suv*rvi, |suv|)])
       .reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)) // ((u,i), (sum(suv*rvi), sum(|suv|)))
       .map({case((u,i),t)=>((u,i),t._1/t._2)}) //((u,i), rbarhat_ui))
