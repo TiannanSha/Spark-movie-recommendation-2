@@ -95,8 +95,6 @@ object Recommender extends App {
         .map(   ts=>ts._2.toList.sortWith( (t1,t2)=>t1._2>t2._2 ).take(300)  )
     val k300nnSims = temp.flatMap(t=>t)
     val k30nnSims = temp.flatMap(t=>t.take(30))
-    println("k300nnSims")
-    k300nnSims.take(100).foreach(println)
     (k300nnSims, k30nnSims)
   }
   //val Ks = Seq(300,30)
@@ -140,8 +138,6 @@ object Recommender extends App {
     .map{case((u,i),rating) => (rating, -i)} // prefer higher rating and smaller itemId
     .top(5)
     .map{case(rating, negI)=>(rating, -negI)}
-  println("top5_k300nn")
-  top5_k300nn.foreach(println)
   val finalListK300 = top5ToFinalList(top5_k300nn)
 
   val top5_k30nn = get_rPred(rbarhats_k30nn)
