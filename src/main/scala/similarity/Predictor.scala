@@ -100,7 +100,7 @@ object Predictor extends App {
 
   // calculate mae for method using cosine similarities
   val rTrue = test.map(r=>((r.user, r.item), r.rating))
-  val cosMae = maeUIR(rTrue, rPred_cosSim)
+  val cosMae = MAE(rTrue, rPred_cosSim)
 
 
 
@@ -147,14 +147,14 @@ object Predictor extends App {
   // euqation 3
   val rPred_jacSim = get_rPred(rbarhats_jacSims, ru_s)
   // calculate MAE
-  val jacMae = maeUIR(rTrue, rPred_jacSim)
+  val jacMae = MAE(rTrue, rPred_jacSim)
 
 
   // ***** helper functions *****
 
   // both rTrue and rPred are in the form of ((u, i), r), where (u,i) is the unique key
   // rTure's r is the actual rating, rPred's r is the predicted rating
-  def maeUIR(rTrue:RDD[((Int, Int), Double)], rPred:RDD[((Int, Int), Double)]): Double = {
+  def MAE(rTrue:RDD[((Int, Int), Double)], rPred:RDD[((Int, Int), Double)]): Double = {
     assert(rTrue.count == rPred.count)
     val joined = rTrue.join(rPred)  // ((u,i), (r_true, r_pred))
     val maeRdd0 = joined.map{
@@ -195,7 +195,7 @@ object Predictor extends App {
   //---------------------------------------------------------------------------------
 
   // ***** Q2.3.3 *****
-  val numUser = ru_s.count()
+  val numUser = ru_s.count().toInt
 
   // ***** Q2.3.4 *****
   // number of sim to compute = number of intersections |I(u) intersect I(v)|
@@ -261,8 +261,8 @@ object Predictor extends App {
 
           "Q2.3.4" -> Map(
             "CosineSimilarityStatistics" -> Map(
-              "min" -> minNumMulti,  // Datatype of answer: Double
-              "max" -> maxNumMulti, // Datatype of answer: Double
+              "min" -> minNumMulti.toDouble,  // Datatype of answer: Double
+              "max" -> maxNumMulti.toDouble, // Datatype of answer: Double
               "average" -> meanNumMulti, // Datatype of answer: Double
               "stddev" -> stdDevNumMulti // Datatype of answer: Double
             )
