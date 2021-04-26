@@ -98,7 +98,7 @@ object Predictor extends App {
     makePredictionsCossim()
   }
   val (rPred_cosSim, rhat_ui, ru_s, numNonzeroSims) = makePredictionsCossim()
-
+  println(rPred_cosSim.getNumPartitions)
 
   // calculate mae for method using cosine similarities
   val rTrue = test.map(r=>((r.user, r.item), r.rating))
