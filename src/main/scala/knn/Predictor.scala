@@ -94,12 +94,13 @@ object Predictor extends App {
   // ***** and then calculate MAEs for different Ks                         *****
   val rTrue = test.map(r=>((r.user, r.item), r.rating))
   var MAE_ForDiffKs = Seq[Double]()
-  val trGroupbyI = train.map(r=>(r.item, r.user)).groupByKey() // (i, [v1,v2,...])
-  val rhat_reorganised = test.map(r=>(r.item, r.user)).join(trGroupbyI) // (i',(u',[v1,v2,...]))
-    .flatMap({case(i,(u,vs)) => vs.map( v=>((v,i),u)  )}) // ((v,i'),u'), i is rated by both u',v
-    .join(rhat_ui).map({case( (v,i),(u, r_vi) ) => ((u,v),(i,r_vi))}) // ((u',v),(i, r_vi))
+//  val trGroupbyI = train.map(r=>(r.item, r.user)).groupByKey() // (i, [v1,v2,...])
+//  val rhat_reorganised = test.map(r=>(r.item, r.user)).join(trGroupbyI) // (i',(u',[v1,v2,...]))
+//    .flatMap({case(i,(u,vs)) => vs.map( v=>((v,i),u)  )}) // ((v,i'),u'), i is rated by both u',v
+//    .join(rhat_ui).map({case( (v,i),(u, r_vi) ) => ((u,v),(i,r_vi))}) // ((u',v),(i, r_vi))
   for (sims <- simsForDiffKs) {
-    MAE_ForDiffKs = MAE_ForDiffKs :+ MAE(rTrue, get_rPred( get_rbarhats(sims, train, rhat_reorganised)))
+    //MAE_ForDiffKs = MAE_ForDiffKs :+ MAE(rTrue, get_rPred( get_rbarhats(sims, train, rhat_reorganised)))
+    MAE_ForDiffKs = MAE_ForDiffKs :+ MAE(rTrue, get_rPred( get_rbarhats(sims, train)))
   }
 
   // Q3.2.1 questions about lowest K that has better MAE than the baseline
@@ -116,18 +117,24 @@ object Predictor extends App {
     i -= 1
   }
 
-  def get_rbarhats(sims: RDD[((Int,Int),Double)], train:RDD[Rating],
-  rhat_reorganized:RDD[((Int,Int),(Int, Double))]) = {
-//    val trGroupbyI = train.map(r=>(r.item, r.user)).groupByKey() // (i, [v1,v2,...])
-//    test.map(r=>(r.item, r.user)).join(trGroupbyI) // (i',(u',[v1,v2,...]))
-//      .flatMap({case(i,(u,vs)) => vs.map( v=>((v,i),u)  )}) // ((v,i'),u'), i is rated by both u',v
-//      .join(rhat_ui).map({case( (v,i),(u, r_vi) ) => ((u,v),(i,r_vi))}) // ((u',v),(i, r_vi)) fixme reuse this
-      rhat_reorganised
+  def get_rbarhats(sims: RDD[((Int,Int),Double)], train:RDD[Rating]) = {
+    val trGroupbyI = train.map(r=>(r.item, r.user)).groupByKey() // (i, [v1,v2,...])
+    test.map(r=>(r.item, r.user)).join(trGroupbyI) // (i',(u',[v1,v2,...]))
+      .flatMap({case(i,(u,vs)) => vs.map( v=>((v,i),u)  )}) // ((v,i'),u'), i is rated by both u',v
+      .join(rhat_ui).map({case( (v,i),(u, r_vi) ) => ((u,v),(i,r_vi))}) // ((u',v),(i, r_vi)) fixme reuse this
+
       .leftOuterJoin(sims) // ( (u,v),((i, r_vi),suv) )
       .map({case((u,v),((i,r_vi), Some(suv))) => ((u,i),(suv*r_vi,math.abs(suv)))
             case((u,v),((i,r_vi), None)) => ((u,i),(0.0,0.0))})  //((u,i),[(suv*rvi, |suv|)])
       .reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)) // ((u,i), (sum(suv*rvi), sum(|suv|)))
       .map({case((u,i),t)=>((u,i),if (t._2==0.0) 0.0 else t._1/t._2)}) //((u,i), rbarhat_ui))
+
+//    rhat_reorganised
+//      .leftOuterJoin(sims) // ( (u,v),((i, r_vi),suv) )
+//      .map({case((u,v),((i,r_vi), Some(suv))) => ((u,i),(suv*r_vi,math.abs(suv)))
+//      case((u,v),((i,r_vi), None)) => ((u,i),(0.0,0.0))})  //((u,i),[(suv*rvi, |suv|)])
+//      .reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)) // ((u,i), (sum(suv*rvi), sum(|suv|)))
+//      .map({case((u,i),t)=>((u,i),if (t._2==0.0) 0.0 else t._1/t._2)}) //((u,i), rbarhat_ui))
   }
 
   // ***** equation 3, generate predictions *****
