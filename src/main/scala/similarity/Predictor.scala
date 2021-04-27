@@ -79,13 +79,12 @@ object Predictor extends App {
     val cosSims = rcs_byI.join(rcs_byI) //all triplets ( i, ((u,rc_ui),(v,rc_vi)) ) such that i is rated by both u,v
       .map({ case (i, ((u, rc_ui), (v, rc_vi))) => ((u, v), rc_ui * rc_vi) })
       .reduceByKey(_ + _)
-    println(cosSims.getNumPartitions) //todo
     val numNonzeroSims = cosSims.count.toInt //use action to triger computations
     allTimeSim = allTimeSim :+ (  (System.nanoTime()-startTime).toDouble / 1000.0  )
 
     // ***** equation 2 and equation 3, generate predictions *****
     val rbarhats_cosSims = get_rbarhats(cosSims, train, rhat_ui)  //eq. 2
-    println(rbarhats_cosSims.getNumPartitions)
+
     val rPred_cosSim= get_rPred(rbarhats_cosSims, ru_s)           //eq. 3
     rPred_cosSim.count()
     allTimePred = allTimePred :+ (  (System.nanoTime() - startTime).toDouble / 1000.0  )
@@ -94,11 +93,10 @@ object Predictor extends App {
 
   // time the sim and prediction calculation for 4+1 times
   // the last time return all reusable results
-  for (i <- 1 to 0) { //todo change back to 4
+  for (i <- 1 to 4) {
     makePredictionsCossim()
   }
   val (rPred_cosSim, rhat_ui, ru_s, numNonzeroSims) = makePredictionsCossim()
-  println(rPred_cosSim.getNumPartitions)
 
   // calculate mae for method using cosine similarities
   val rTrue = test.map(r=>((r.user, r.item), r.rating))
@@ -110,15 +108,13 @@ object Predictor extends App {
   // rbarhats for all the (u,i) s.t. i is in train and hence rbarhat_i(u) is defined
   def get_rbarhats(sims: RDD[((Int,Int),Double)], train:RDD[Rating], rhat_ui:RDD[((Int,Int),Double)]) = {
     val trGroupbyI = train.map(r=>(r.item, r.user)).groupByKey() // (i, [v1,v2,...])
-    val temp = test.map(r=>(r.item, r.user)).join(trGroupbyI) // (i',(u',[v1,v2,...]))
+    test.map(r=>(r.item, r.user)).join(trGroupbyI) // (i',(u',[v1,v2,...]))
       .flatMap({case(i,(u,vs)) => vs.map( v=>((v,i),u)  )}) // ((v,i'),u'), i is rated by both u',v
       .join(rhat_ui).map({case( (v,i),(u, r_vi) ) => ((u,v),(i,r_vi))}) // ((u',v),(i, r_vi))
+      .leftOuterJoin(sims) // ( (u,v),((i, r_vi),suv) )
 
-    println(temp.getNumPartitions) //todo delete temp
-      val temp2 = temp.leftOuterJoin(sims) // ( (u,v),((i, r_vi),suv) )
-    println(temp2.getNumPartitions)
-      temp2.map({case((u,v),((i,r_vi), Some(suv))) => ((u,i),(suv*r_vi,math.abs(suv)))
-      case((u,v),((i,r_vi), None)) => ((u,i),(0.0,0.0))})  //((u,i),[(suv*rvi, |suv|)])
+      .map({case((u,v),((i,r_vi), Some(suv))) => ((u,i),(suv*r_vi,math.abs(suv)))
+            case((u,v),((i,r_vi), None)) => ((u,i),(0.0,0.0))})  //((u,i),[(suv*rvi, |suv|)])
       .reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)) // ((u,i), (sum(suv*rvi), sum(|suv|)))
       .map({case((u,i),t)=>((u,i),t._1/t._2)}) //((u,i), rbarhat_ui))
   }
@@ -206,7 +202,6 @@ object Predictor extends App {
   // number of sim to compute = number of intersections |I(u) intersect I(v)|
   // there are in total numUser^2 (u,v) pairs. We want the statistics of all |I(u) intersect I(v)|
   // intersectCounts are non-zero |I(u) intersect I(v)|. For all other u,v, |I(u) intersect I(v)|=0
-  // fixme : maybe try cartesian product
   val numZero = numUser*numUser - intersectCounts.count
   val allIntersect = intersectCounts.values.union(spark.sparkContext.parallelize(Range(0,numZero.toInt).map(_=>0)))
   val minNumMulti = allIntersect.min

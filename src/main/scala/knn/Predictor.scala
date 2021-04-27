@@ -6,10 +6,8 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.log4j.Logger
 import org.apache.log4j.Level
-import similarity.Predictor.{MAE, normalDevi, pui, rbarhats_jacSims, test, train}
+import similarity.Predictor.{MAE, normalDevi, pui}
 
-import scala.util.control.Breaks.break //todo import cosSims
-//import similarity.Rating
 
 class Conf(arguments: Seq[String]) extends ScallopConf(arguments) {
   val train = opt[String](required = true)
@@ -83,7 +81,7 @@ object Predictor extends App {
       .map(   ts=>ts._2.toList.sortWith( (t1,t2)=>t1._2>t2._2 ).take(Ks(0))  )
     var simsForDiffKs = Seq[RDD[((Int,Int),Double)]]()
 
-    for (k <- Ks) {//fixme delete colesce
+    for (k <- Ks) {
       simsForDiffKs = simsForDiffKs :+ temp.flatMap(t=>t.take(k+1)) // including su,u which is never used
     }
     simsForDiffKs
@@ -99,7 +97,7 @@ object Predictor extends App {
   val trGroupbyI = train.map(r=>(r.item, r.user)).groupByKey() // (i, [v1,v2,...])
   val rhat_reorganised = test.map(r=>(r.item, r.user)).join(trGroupbyI) // (i',(u',[v1,v2,...]))
     .flatMap({case(i,(u,vs)) => vs.map( v=>((v,i),u)  )}) // ((v,i'),u'), i is rated by both u',v
-    .join(rhat_ui).map({case( (v,i),(u, r_vi) ) => ((u,v),(i,r_vi))}) // ((u',v),(i, r_vi)) fixme reuse this
+    .join(rhat_ui).map({case( (v,i),(u, r_vi) ) => ((u,v),(i,r_vi))}) // ((u',v),(i, r_vi))
   for (sims <- simsForDiffKs) {
     MAE_ForDiffKs = MAE_ForDiffKs :+ MAE(rTrue, get_rPred( get_rbarhats(sims, train, rhat_reorganised)))
   }
